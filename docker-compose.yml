@@ -1,0 +1,8 @@
+services:
+  predictor:
+    build: .
+    volumes:
+      - ./data:/app/data:ro
+      - ./:/app/out
+    command: >
+      sh -c "python run.py --data /app/data --out /app/out/predictions.csv && python validate_submission.py /app/out/predictions.csv"
