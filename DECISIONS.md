@@ -32,7 +32,8 @@ This document details five key engineering choices made in developing the LPDG G
 
 ---
 
-### Decision 5: Modular Engine Architecture & Part 2 Preparation
-* **Choice**: Decouple the codebase into clean layers: ingestion (`load_master`, `load_telemetry`), domain logic (`evaluate_week`), and presentation/CLI (`build_all_predictions`, `run.py`).
-* **Alternatives Considered**: Maintaining a single monolithic script similar to `baseline_3sigma.py`.
-* **Why Rejected**: Part 1 requires single-command reliability across diverse host environments (`Makefile`, `docker-compose.yml`, direct Python). More importantly, the upcoming 35-minute live session requires modifying the system live under inspection (e.g. altering thresholds, exposing new API endpoints, or handling corrupted inputs). A decoupled modular structure guarantees that domain heuristics can be modified in minutes without risking ingestion regressions.
+### Decision 5: Part 2 Specialization Track Selection (Track D — Data Science)
+* **Choice**: Selected **Track D — Data Science** to answer the fundamental operational question left unanswered in the challenge brief: formally defining what "needs a visit" means and converting the €380 visit cost vs. compounding €600/week penalty into an optimal mathematical decision threshold.
+* **Alternatives Considered**: Software Development (Track B - web API) or Machine Learning (Track E - training black-box classifiers).
+* **Why Rejected**: The brief explicitly notes that operations currently selects 15 sites a week from "a spreadsheet and gut feel", resulting in a disastrous 60.7% historical false alarm rate. Pure machine learning or software wrappers without answering the core decision-theoretic threshold question fail to solve the actual business problem. Data Science directly tackles the asymmetric cost function ($\frac{600}{380} \approx 1.58$), proves why naive statistical outliers suffer a 100% false alarm rate, and provides the Operations Manager with empirical confidence interval ranges (1,000-sample bootstrap) and visual trade-off curves. Furthermore, Track D directly prepares for the live session requirement: shifting the threshold and demonstrating the exact marginal cost in both directions.
+
