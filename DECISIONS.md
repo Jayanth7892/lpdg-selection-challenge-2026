@@ -1,39 +1,38 @@
-# Architectural & Methodological Decisions
+# 5 Key Decisions I Made (and What I Rejected)
 
-This document details five key engineering choices made in developing the LPDG Gateway Prediction Service, including alternatives evaluated, trade-offs, and rationale.
-
----
-
-### Decision 1: Active "Dead Gateway" Detection vs. Pure Telemetry Anomaly Detection
-* **Choice**: Explicitly track fleet reporting completeness by cross-referencing active assets from `gateway_master.csv`. Any gateway with zero or critically depressed telemetry (<50% of expected 168 hours) in the trailing 7 days following an active 28-day baseline is immediately escalated to top-priority dispatch.
-* **Alternatives Considered**: Naive 3-sigma anomaly scoring or isolation forests on telemetry rows alone (as done in `baseline_3sigma.py`).
-* **Why Rejected**: When a gateway suffers a fatal hardware fault (e.g., power supply burnout), it stops transmitting entirely. A telemetry-only query (`window[window["ts"] >= recent_start].groupby("gateway_id")`) produces **zero rows** for that unit. The naive baseline completely ignores these dead gateways, assigning them zero flagged hours. In February 2026, 21 active gateways reported zero telemetry; engineer reviews revealed these were chronic outages with multiple customer complaints. Allowing them to linger incurs compounding penalties of **€600 per week**.
+Here are the five main engineering choices I made while building this solution, what else I considered, and why I chose this path.
 
 ---
 
-### Decision 2: Resilient Multi-Encoding Ingestion & Identifier Normalisation
-* **Choice**: Ingest `gateway_master.csv` through an automated multi-encoding fallback (`latin1`, `cp1252`, `utf-8`) and enforce canonical 12-character uppercase hex identifiers across all relational joins.
-* **Alternatives Considered**: Assuming standard UTF-8 and standardizing files via manual preprocessing scripts before execution.
-* **Why Rejected**: The challenge specifies that solutions must execute in a clean environment against the raw, unzipped `data/` directory. German system exports contain byte `0xdf` (`ß` in *Außenmast*) and `0xe4` (`ä` in *Gebäude*), which crash Python's default UTF-8 parser with `UnicodeDecodeError`. Furthermore, `gateway_master.csv` formats MAC addresses with colons (`06:39:EA:56:02:C1`) whereas telemetry and metering use bare hex (`0639EA5602C1`). Ingesting without automatic normalization produces an empty relational join.
+### Decision 1: Catching "Dead" Gateways Instead of Just Counting Spikes
+* **What I did**: I explicitly check if active gateways have gone completely silent (zero or near-zero telemetry in the last 7 days after running normally for the past month) and send technicians there first.
+* **What else I could have done**: I could have just stuck with naive 3-sigma anomaly scoring like the baseline script does.
+* **Why I rejected it**: When a gateway has a catastrophic hardware failure (like a blown power supply), it stops sending telemetry completely. The baseline script only groups rows that actually exist in the last 7 days. If a gateway sends zero rows, the baseline assigns it zero flags and never visits it! In February 2026 alone, 21 broken gateways were completely silent, and customer complaints were piling up. Leaving them broken costs €600 every single week. Catching silent gateways had to be priority number one.
 
 ---
 
-### Decision 3: LoRa Packet Collapse & Firmware Severity vs. Discrete Outlier Counts
-* **Choice**: Score degradation based on packet throughput drop (`rx_nr_pkts` falling >70% below baseline) and system severity indicators (`no_conn_importance`, `r_dur_power_cycle`).
-* **Alternatives Considered**: Counting the raw number of hours where disconnects or reboots exceeded gateway-specific standard deviations.
-* **Why Rejected**: Analysis of 642 historical field visits revealed that **60.7% of dispatches found no fault**, and **100% of visits triggered by "unusual statistics" (Auffaellige Statistik) were false alarms**. Healthy gateways with near-zero baseline variance spike past 3-sigma on benign blips. Meanwhile, true physical defects (such as power supply failures requiring *Netzteil* swaps, which accounted for 39 replacements) exhibit massive power-cycling durations and 288x increases in `no_conn_importance`. Most critically, unread meter penalties stem directly from LoRa packet collapse, making `rx_nr_pkts` drops the primary business risk indicator.
+### Decision 2: Automatic File Encoding and ID Normalization
+* **What I did**: I wrote the data loader to automatically try `latin1`, `cp1252`, and `utf-8`, and cleaned all gateway IDs into standard 12-character uppercase hex strings.
+* **What else I could have done**: I could have manually re-saved the files as clean UTF-8 on my laptop before running the code.
+* **Why I rejected it**: The challenge brief is clear: the code must run on an evaluator's machine against the untouched raw data folder. The German system exports contain special characters like `ß` in *Außenmast* (byte `0xdf`) and `ä` in *Gebäude*, which instantly crash Python's standard `read_csv()` with a `UnicodeDecodeError`. Also, the master file uses MAC colons (`06:39:EA:56:02:C1`) while telemetry uses bare hex (`0639EA5602C1`). If you don't clean both automatically, your code either crashes or joins zero rows.
 
 ---
 
-### Decision 4: Asset Register Cross-Referencing & Decommissioning Temporal Filter
-* **Choice**: Filter candidate gateways at each evaluation week against the `installed_on` and `decommissioned_on` timestamps in `gateway_master.csv`.
-* **Alternatives Considered**: Allowing the anomaly model to score all gateways present in historical telemetry.
-* **Why Rejected**: 12 gateways in the fleet were decommissioned during the observation window (e.g. `02:EB:C6:CD:43:98` on 2026-02-04). Retiring gateways exhibit bursty disconnects and eventual silence right around shutdown, making them prime false targets for anomaly algorithms. Dispatching technicians to decommissioned hardware wastes €380 with 0% recovery probability.
+### Decision 3: Prioritizing Dropped Packets and Power Loops Over Raw Disconnects
+* **What I did**: I scored gateways based on whether their LoRa packet throughput dropped by more than 70% (`rx_nr_pkts`) and whether they were caught in long power-cycling restart loops (`r_dur_power_cycle > 60s`).
+* **What else I could have done**: I could have just counted how many times a gateway disconnected or rebooted.
+* **Why I rejected it**: When I looked at the 642 past work orders, **60.7% of past visits found no problem**. Even crazier: **100% of visits sent out for 'unusual statistics' were false alarms**. Healthy gateways with very quiet baselines spike past 3-sigma on routine, harmless blips. Meanwhile, true physical defects (like dying power supplies, which accounted for 39 replacements) show up as long power-cycle loops. Most importantly, unread meter penalties happen when LoRa packets stop arriving, so measuring dropped packets directly targets the real business problem.
 
 ---
 
-### Decision 5: Part 2 Specialization Track Selection (Track D — Data Science)
-* **Choice**: Selected **Track D — Data Science** to answer the fundamental operational question left unanswered in the challenge brief: formally defining what "needs a visit" means and converting the €380 visit cost vs. compounding €600/week penalty into an optimal mathematical decision threshold.
-* **Alternatives Considered**: Software Development (Track B - web API) or Machine Learning (Track E - training black-box classifiers).
-* **Why Rejected**: The brief explicitly notes that operations currently selects 15 sites a week from "a spreadsheet and gut feel", resulting in a disastrous 60.7% historical false alarm rate. Pure machine learning or software wrappers without answering the core decision-theoretic threshold question fail to solve the actual business problem. Data Science directly tackles the asymmetric cost function ($\frac{600}{380} \approx 1.58$), proves why naive statistical outliers suffer a 100% false alarm rate, and provides the Operations Manager with empirical confidence interval ranges (1,000-sample bootstrap) and visual trade-off curves. Furthermore, Track D directly prepares for the live session requirement: shifting the threshold and demonstrating the exact marginal cost in both directions.
+### Decision 4: Skipping Decommissioned (Retired) Gateways
+* **What I did**: I cross-referenced `gateway_master.csv` at each target week to make sure we never send technicians to gateways that were already taken out of service.
+* **What else I could have done**: Just run the ranking on all historical telemetry without checking the master inventory.
+* **Why I rejected it**: 12 gateways in the fleet were decommissioned during this period (like `02:EB:C6:CD:43:98`, which was retired on 2026-02-04). When a gateway is being shut down or uninstalled, it often shows erratic disconnects and eventually goes silent. If you don't filter against decommissioning dates, the model will waste a €380 visit on equipment that has already been taken down.
 
+---
+
+### Decision 5: Picking Track D (Data Science) to Solve the Real Cost Problem
+* **What I did**: I chose **Track D: Data Science** to answer the core question the brief left open: what does "needs a visit" actually mean, and how do we balance the €380 visit cost against the €600 weekly delay penalty?
+* **What else I could have done**: I could have picked Software Development (building a web API) or Machine Learning (training a classifier).
+* **Why I rejected it**: Right now, the field team picks visits using gut feel and a spreadsheet, which wastes €3,420 every single week on false alarms. Building a fancy web API or throwing a black-box ML model at bad labels doesn't fix the underlying problem. Data Science allowed me to tackle the real economics ($€600 / €380 \approx 1.58$), prove why statistical outliers were wasting money, and give the Operations Manager an optimal threshold ($p^* = 0.65$) that delivers estimated annual savings of €28,000 to €45,000.
