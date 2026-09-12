@@ -4,6 +4,13 @@ data/
 *.zip
 *.parquet
 
+# Video files - Exceeds GitHub 100MB file limit
+*.mp4
+*.mkv
+*.mov
+*.avi
+*.webm
+
 # Python artifacts
 __pycache__/
 *.py[cod]
